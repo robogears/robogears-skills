@@ -1,18 +1,23 @@
 ---
-name: ankideckcreatorV3
-version: 0.1.3
-description: ankideckcreatorV3 (v0.1.3) — THE current Anki deck builder — supersedes ankideckcreator and ankideckcreatorV2 (both retired; this is the only one). Build a complete, studiable Anki deck in William's house style — agent-written and adversarially-verified card content, an example sentence on the back of every card, neural TTS audio on every card, the signature parchment/indigo/marigold card design, delivered live into Anki via AnkiConnect with an .apkg backup. Use this whenever the user asks to make an Anki deck, flashcards, a vocab deck, a "core" deck for a language, study cards for any topic, or says anything equivalent ("make me cards for X", "add a deck for Y", "I want to memorize Z") — even if they don't say the word Anki. Also use it to EXTEND an existing house-style deck (adding cards to a deck this skill built earlier, e.g. a sentence-mining deck feeding into the same note type).
+name: ankideckcreator
+version: 0.1.4
+description: ankideckcreator (v0.1.4) — THE Anki deck builder; the V2/V3 variants are retired and this is the only one. Build a complete, studiable Anki deck in William's house style — agent-written and adversarially-verified card content, an example sentence on the back of every card, neural TTS audio on every card, the signature parchment/indigo/marigold card design, delivered live into Anki via AnkiConnect with an .apkg backup. Use this whenever the user asks to make an Anki deck, flashcards, a vocab deck, a "core" deck for a language, study cards for any topic, or says anything equivalent ("make me cards for X", "add a deck for Y", "I want to memorize Z") — even if they don't say the word Anki. Also use it to EXTEND an existing house-style deck (adding cards to a deck this skill built earlier, e.g. a sentence-mining deck feeding into the same note type).
 ---
 
-# Anki Deck Creator (v3)
+# Anki Deck Creator
 
 Reproduce the pipeline that built William's Hindi Core 2k — the deck he called perfect — for whatever topic follows the command. The two things he loves are (1) the card design and (2) the content quality that came from adversarial verification. Never economize on either.
 
 The finished deck always has, on every card: a headword, a concise gloss, a part-of-speech / category line, an example sentence ON THE BACK with its translation/explanation, neural TTS audio for both word and sentence, and the signature design. Cards are ordered most-useful-first.
 
-> **v3** supersedes `ankideckcreatorV2` (and `ankideckcreator`), both kept unchanged for reference. **The one change in v3: the skill no longer touches deck options.** It creates no preset, edits none, and moves no deck between them — a new deck simply keeps Anki's Default preset and its rules. See `references/CHANGES-v3.md`. Everything else is v2, whose fixes are listed in `references/CHANGES-v2.md`.
+> **The skill never touches deck options.** It creates no preset, edits none, and moves
+> no deck between them — a new deck simply keeps Anki's Default preset and its rules.
+> That change arrived in the v3 variant and is now the permanent behaviour; the
+> reasoning is in `references/CHANGES-v3.md`. The earlier `ankideckcreatorV2` and
+> `ankideckcreator` variants are retired — this skill absorbs them, and their fix list
+> is in `references/CHANGES-v2.md`.
 >
-> The v2 inheritance: the record schema matches what the scripts actually read, the scaffold builds the approved design and its `Hint` field, delivery cannot mass-duplicate notes after a crash, failed audio never deletes good clips, the nuqta step cannot silently do nothing, and the quality checks catch *missing* pronunciation marks as well as wrong ones. All configuration lives in ONE file: `config.py`.
+> Inherited behaviour: the record schema matches what the scripts actually read, the scaffold builds the approved design and its `Hint` field, delivery cannot mass-duplicate notes after a crash, failed audio never deletes good clips, the nuqta step cannot silently do nothing, and the quality checks catch *missing* pronunciation marks as well as wrong ones. All configuration lives in ONE file: `config.py`.
 
 ## Phase 0 — Scope the deck (one quick exchange, or infer)
 
@@ -93,7 +98,7 @@ Card markup comes from `markup.py`: the target word inside its sentence gets `<b
 
 Anki must be OPEN (AnkiConnect on localhost:8765; `open -a Anki`, poll `version`). Then:
 
-1. **`python anki.py`** — creates/verifies the deck and the note type (11 fields + `Hint`, templates from `card_css.py`), then **reports the deck's options preset without changing it**. v3 creates no preset, edits none, and moves no deck between them: a new deck keeps Anki's **Default** preset and Default's rules, and an existing deck keeps whatever preset the user chose. **Never** set daily limits from the skill — Default is shared by several decks, so writing to it would re-pace all of them. If the user wants a different pace, tell them to set it in Anki's deck options (Deck ⚙ → Options), or to make a preset by hand and assign it there.
+1. **`python anki.py`** — creates/verifies the deck and the note type (11 fields + `Hint`, templates from `card_css.py`), then **reports the deck's options preset without changing it**. It creates no preset, edits none, and moves no deck between them: a new deck keeps Anki's **Default** preset and Default's rules, and an existing deck keeps whatever preset the user chose. **Never** set daily limits from the skill — Default is shared by several decks, so writing to it would re-pace all of them. If the user wants a different pace, tell them to set it in Anki's deck options (Deck ⚙ → Options), or to make a preset by hand and assign it there.
 2. **`python add_notes.py`** — adds in ascending rank order (Anki's new-card order follows insertion). It refuses a batch whose ranks fall below what's already delivered, saves progress after every 100 notes, and leaves Anki's duplicate check ON. `--dry-run` first if you want to see the plan.
 3. **Audit the LIVE deck, not the source files** — checklist in `references/pipeline.md`.
 4. **Export a backup**: `python -c "import anki; anki.export('<path>.apkg')"` → send the .apkg to the user. This saved the Hindi deck when an AnkiWeb pull wiped the collection. Warn the user: if they sync after a build, the FIRST sync must be *Upload to AnkiWeb*, never Download.

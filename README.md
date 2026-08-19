@@ -87,7 +87,7 @@ relaunch with rollback — plus a concrete implementation per stack. Written for
 awkward case in particular: ad-hoc-signed, un-notarized apps updating themselves
 outside the App Store.
 
-### 📇 [ankideckcreatorV3](skills/ankideckcreatorV3) · v0.1.3
+### 📇 [ankideckcreator](skills/ankideckcreator) · v0.1.4
 
 Builds a complete, genuinely studiable Anki deck on any topic.
 
@@ -96,7 +96,7 @@ pass — because in spaced repetition, an error you miss gets rehearsed hundreds
 Every card gets an example sentence and neural TTS audio. Decks are delivered live into
 Anki over AnkiConnect with an `.apkg` backup written first.
 
-v3's one rule: it **never touches your deck options**. It creates no presets, reassigns
+Its one hard rule: it **never touches your deck options**. It creates no presets, reassigns
 nothing, and writes no scheduling limits — new decks simply inherit Anki's Default, and
 existing decks keep whatever they're on, so extending a deck you're already studying
 can't disturb its schedule or FSRS parameters.

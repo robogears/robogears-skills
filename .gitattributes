@@ -1,0 +1,17 @@
+# Shell scripts must keep LF endings — a CRLF shebang fails silently and confusingly.
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Markdown and config: normalize on checkin, LF in the repo.
+*.md    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.py    text eol=lf
+
+# Binary assets — never touch.
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.zip   binary
+*.icns  binary

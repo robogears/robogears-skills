@@ -1,0 +1,6 @@
+# Normalize all text to LF in the repo. The hooks and scripts are executed by
+# /bin/sh and bash — a CRLF line ending would break the shebang and word-splitting,
+# so shell files are pinned to LF regardless of the checkout platform.
+* text=auto eol=lf
+*.sh text eol=lf
+*.md text eol=lf

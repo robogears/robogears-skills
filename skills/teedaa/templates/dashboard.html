@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>teedaa — folder audit</title>
+<style>
+:root{
+  --bg:#FCFCFB; --panel:#F4F3F0; --ink:#1B1D1F; --ink2:#5A5E63; --ink3:#8B8F94;
+  --line:#E3E1DC; --accent:#1D9E75; --warm:#C0392B; --tile:#F7F6F3;
+  --focus:#2C6FBF;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14171B; --panel:#1C2026; --ink:#E8E6E1; --ink2:#9BA0A6; --ink3:#6C7178;
+    --line:#2A2F36; --accent:#28A276; --warm:#D14837; --tile:#191D22;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding:28px clamp(14px,4vw,48px) 80px}
+.mono{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+a{color:var(--focus)}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+header{margin-bottom:26px}
+.eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink3)}
+h1{font-size:clamp(19px,3vw,26px);font-weight:600;margin:6px 0 2px;word-break:break-all}
+h1 .mono{font-weight:500}
+.scanmeta{color:var(--ink2);font-size:13px}
+h2{font-size:15px;font-weight:600;margin:34px 0 12px;display:flex;align-items:baseline;gap:10px}
+h2 .sub{font-weight:400;font-size:12.5px;color:var(--ink3)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:18px}
+.tile{background:var(--tile);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:20px;font-weight:600}
+.tile .l{font-size:11px;color:var(--ink3);letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+.tile.warm .v{color:var(--warm)}
+.tmwrap{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+#crumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:12.5px;min-height:26px;padding:0 2px 8px}
+#crumb button{color:var(--ink2);padding:2px 6px;border-radius:5px}
+#crumb button:hover{background:var(--tile);color:var(--ink)}
+#crumb .sep{color:var(--ink3)}
+#crumb .here{color:var(--ink);font-weight:600;padding:2px 6px}
+#tmbox{position:relative;width:100%;height:min(62vh,560px)}
+#tm,#tmov{position:absolute;inset:0;width:100%;height:100%;border-radius:6px}
+#tmov{pointer-events:none}
+#tip{position:fixed;z-index:10;pointer-events:none;background:var(--ink);color:var(--bg);
+  border-radius:7px;padding:8px 11px;font-size:12.5px;line-height:1.5;max-width:340px;
+  opacity:0;transition:opacity .12s;box-shadow:0 4px 18px rgba(0,0,0,.25)}
+#tip .t{font-weight:600;word-break:break-all}
+#tip .d{opacity:.75}
+.bar{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:12px 2px 2px}
+.lens{display:flex;gap:2px;background:var(--tile);border:1px solid var(--line);border-radius:8px;padding:2px}
+.lens button{padding:4px 12px;border-radius:6px;font-size:12.5px;color:var(--ink2)}
+.lens button[aria-pressed="true"]{background:var(--bg);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+#legend{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2);
+  border:1px solid var(--line);border-radius:999px;padding:3px 10px 3px 7px}
+.chip .sw{width:10px;height:10px;border-radius:3px}
+.chip[aria-pressed="true"]{background:var(--tile);color:var(--ink);border-color:var(--ink3)}
+.chip .pct{color:var(--ink3)}
+.hint{font-size:12px;color:var(--ink3);margin-top:8px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card h3{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);font-weight:600;margin-bottom:10px}
+canvas.chart{width:100%;height:220px;display:block}
+.rows{display:flex;flex-direction:column;gap:7px}
+.rrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;font-size:13px}
+.rrow .p{color:var(--ink2);word-break:break-all;text-align:left;padding:2px 4px;border-radius:5px}
+.rrow .p:hover{background:var(--tile);color:var(--ink)}
+.rrow .track{grid-column:1/-1;height:6px;background:var(--tile);border-radius:3px;overflow:hidden}
+.rrow .fill{height:100%;background:var(--warm);border-radius:3px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);cursor:pointer;white-space:nowrap;user-select:none}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:nowrap}
+td.path{max-width:0;width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl}
+td.path span{direction:ltr;unicode-bidi:isolate}
+.badge{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+details{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin-top:12px}
+summary{cursor:pointer;padding:12px 16px;font-weight:600;font-size:14px;list-style:none;display:flex;gap:8px;align-items:baseline}
+summary::before{content:"▸";color:var(--ink3);font-size:11px;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+summary .sub{font-weight:400;color:var(--ink3);font-size:12.5px}
+.dbody{padding:0 16px 14px}
+footer{margin-top:44px;color:var(--ink3);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+@media (prefers-reduced-motion: reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+<script id="D" type="application/json">__TEEDAA_DATA__</script>
+
+<header>
+  <div class="eyebrow mono">teedaa · folder audit · read-only</div>
+  <h1 class="mono" id="h-root"></h1>
+  <div class="scanmeta" id="h-meta"></div>
+  <div class="tiles" id="tiles"></div>
+</header>
+
+<h2>The map <span class="sub">click a folder to zoom · Backspace up · Esc top · lens changes what color means</span></h2>
+<div class="tmwrap">
+  <nav id="crumb" aria-label="treemap path"></nav>
+  <div id="tmbox">
+    <canvas id="tm"></canvas>
+    <canvas id="tmov"></canvas>
+  </div>
+  <div class="bar">
+    <div class="lens" role="group" aria-label="color lens" id="lens">
+      <button aria-pressed="true"  data-lens="cat">Category</button>
+      <button aria-pressed="false" data-lens="age">Age</button>
+      <button aria-pressed="false" data-lens="ext">File type</button>
+    </div>
+    <div id="legend" aria-label="legend"></div>
+  </div>
+  <p class="hint" id="lenshint">Colors show what kind of files live where. Click a legend chip to spotlight one category.</p>
+</div>
+<div id="tip" role="status"></div>
+
+<h2>Charts</h2>
+<div class="grid2">
+  <div class="card"><h3 id="agehead">Bytes by year last modified</h3><canvas id="agechart" class="chart"></canvas></div>
+  <div class="card"><h3>What kind of stuff</h3><canvas id="donut" class="chart"></canvas></div>
+</div>
+
+<h2>Where the reclaimable weight sits <span class="sub">junk (certain + probable) per folder — click to zoom the map there</span></h2>
+<div class="card"><div class="rows" id="reclaim"></div></div>
+
+<h2>Largest 100 files <span class="sub">click a column to sort</span></h2>
+<div class="card" style="overflow-x:auto">
+  <table id="top100"><thead><tr>
+    <th data-k="size" class="num">Size</th><th data-k="path">File</th>
+    <th data-k="cat">Category</th><th data-k="year" class="num">Year</th><th></th>
+  </tr></thead><tbody></tbody></table>
+</div>
+
+<div id="lists"></div>
+
+<footer id="foot"></footer>
+
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("D").textContent);
+const DARK = matchMedia("(prefers-color-scheme: dark)");
+const RM = matchMedia("(prefers-reduced-motion: reduce)");
+const CATS = D.cats;
+const PAL = {
+  light:{photos:"#1D9E75",screenshots:"#62BFA0",images:"#8FA39B",videos:"#2C6FBF",
+    music:"#7B5CD6",documents:"#1FA8A0",code:"#5A5FA8",archives:"#94720A",
+    installers:"#B98E2E",junk:"#C0392B",cache:"#C97B08",other:"#8E8C84"},
+  dark:{photos:"#28A276",screenshots:"#4EC29B",images:"#5E6B66",videos:"#4E8AD6",
+    music:"#8F7ADC",documents:"#2FA69E",code:"#7A80CC",archives:"#AD8F35",
+    installers:"#C7A14E",junk:"#D14837",cache:"#C08419",other:"#6E6C66"}
+};
+const AGE = { light:["#DCEEF7","#0A3350"], dark:["#A8D8F2","#27506E"] };
+function pal(){ return PAL[DARK.matches ? "dark":"light"]; }
+function catColor(i){ return pal()[CATS[i]] || pal().other; }
+const human = n => { let u=["B","KB","MB","GB","TB"],i=0;
+  while(n>=1024 && i<4){n/=1024;i++} return (i? n.toFixed(n>=10?0:1):n)+" "+u[i]; };
+const esc = s => s.replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* node shape: rollup [label,b,-1,[n,tallies]] · dir [name,b,cat,kids,year] · file [name,b,cat,year] */
+const isRoll = n => n[2] === -1;
+const isDir  = n => !isRoll(n) && Array.isArray(n[3]);
+const kidsOf = n => isDir(n) ? n[3] : null;
+const yearOf = n => isRoll(n) ? 0 : (isDir(n) ? (n[4]||0) : (n[3]||0));
+const extOf  = n => { const i = n[0].lastIndexOf(".");
+  return i>0 ? n[0].slice(i+1).toLowerCase() : ""; };
+
+/* ---------- header ---------- */
+document.getElementById("h-root").textContent = D.root;
+const T = D.totals;
+const junkAB = D.junk.filter(r=>"AB".includes(r.tier)).reduce((a,r)=>a+r.bytes,0);
+const junkABn = D.junk.filter(r=>"AB".includes(r.tier)).reduce((a,r)=>a+r.count,0);
+document.getElementById("h-meta").textContent =
+  `${T.files.toLocaleString()} files · ${T.dirs.toLocaleString()} folders · scanned ` +
+  new Date(D.generated*1000).toLocaleString() + " · nothing was opened, moved, or downloaded";
+const tiles = [
+  [human(T.bytes), "total content", ""],
+  [human(T.physical), "on this disk", ""],
+  [T.dataless_files ? human(T.dataless_bytes) : "0", "cloud-only", ""],
+  [human(junkAB), `junk · ${junkABn.toLocaleString()} items`, junkAB?"warm":""],
+  [D.dupes.groups ? human(D.dupes.wasted_bytes) : "0", "duplicate overlap", D.dupes.groups?"warm":""],
+  [T.errors.toLocaleString(), "unreadable", ""]
+];
+document.getElementById("tiles").innerHTML = tiles.map(([v,l,c]) =>
+  `<div class="tile ${c}"><div class="v mono">${v}</div><div class="l">${l}</div></div>`).join("");
+
+/* ---------- treemap ---------- */
+const box = document.getElementById("tmbox");
+const cv = document.getElementById("tm"), ov = document.getElementById("tmov");
+const ctx = cv.getContext("2d"), octx = ov.getContext("2d");
+const tip = document.getElementById("tip");
+let stack = [D.tree];        // zoom path (nodes)
+let rects = [];              // flat hit list: {x,y,w,h,node,chain,depth,hdr}
+let lens = "cat", spotlight = null, extPal = null, animId = 0;
+
+function worst(row, short, scale){
+  let s = 0, mx = 0, mn = Infinity;
+  for (const a of row){ s += a; if (a>mx) mx=a; if (a<mn) mn=a; }
+  const s2 = s*s, w2 = short*short;
+  return Math.max(w2*mx*scale/s2, s2/(w2*mn*scale));
+}
+function squarify(items, x, y, w, h, out){
+  // items: [area,node][] pre-sorted desc; lays rows along the short side
+  let i = 0;
+  while (i < items.length){
+    const short = Math.min(w,h);
+    if (short <= 0.5 || w<=0 || h<=0){ break; }
+    let row = [], rowArea = 0, j = i;
+    while (j < items.length){
+      const cand = items[j][0];
+      if (row.length){
+        const cur = worst(row, short, 1), nxt = worst(row.concat(cand), short, 1);
+        if (nxt > cur) break;
+      }
+      row.push(cand); rowArea += cand; j++;
+    }
+    const thick = rowArea/short;
+    let off = 0;
+    for (let k=0;k<row.length;k++){
+      const len = row[k]/thick;
+      const last = (k===row.length-1);
+      if (w>=h){
+        const rw = thick, rh = last ? short-off : len;
+        out.push({x:x, y:y+off, w:rw, h:rh, node:items[i+k][1]});
+        off += len;
+      } else {
+        const rw = last ? short-off : len, rh = thick;
+        out.push({x:x+off, y:y, w:rw, h:rh, node:items[i+k][1]});
+        off += len;
+      }
+    }
+    if (w>=h){ x += thick; w -= thick; } else { y += thick; h -= thick; }
+    i = j;
+  }
+}
+const HDR = 15;
+function layout(node, x, y, w, h, depth, chain){
+  const kids = kidsOf(node); if (!kids || w<6 || h<6) return;
+  const total = kids.reduce((a,k)=>a+Math.max(k[1],0), 0) || 1;
+  const scale = (w*h)/total;
+  const items = kids.filter(k=>k[1]*scale >= 1).map(k=>[k[1]*scale, k]);
+  const cells = [];
+  squarify(items, x, y, w, h, cells);
+  for (const c of cells){
+    const n = c.node, sub = kidsOf(n);
+    const hdr = sub && c.h >= 34 && c.w >= 64;
+    rects.push({x:c.x,y:c.y,w:c.w,h:c.h,node:n,chain,depth,hdr});
+    if (sub && c.w>=26 && c.h>= (hdr?40:26) && depth<7){
+      layout(n, c.x+1.5, c.y+(hdr?HDR+1.5:1.5), c.w-3, c.h-(hdr?HDR+3:3),
+             depth+1, chain.concat([n]));
+    }
+  }
+}
+function mixHex(a,b,t){
+  const p=h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+  const A=p(a),B=p(b);
+  return "rgb("+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(",")+")";
+}
+let yearSpan = null;
+function colorOf(n){
+  if (isRoll(n)) return DARK.matches ? "#3A3F46" : "#DDDBD5";
+  if (lens === "age"){
+    const y = yearOf(n);
+    if (!y) return DARK.matches ? "#333840" : "#E6E4DF";
+    if (!yearSpan){
+      const ys = Object.keys(D.ageByYear).map(Number);
+      yearSpan = ys.length ? [Math.min(...ys), Math.max(...ys)] : [1995,2026];
+    }
+    const t = yearSpan[1] === yearSpan[0] ? 0
+      : 1 - (y - yearSpan[0]) / (yearSpan[1]-yearSpan[0]);
+    const R = AGE[DARK.matches?"dark":"light"];
+    return mixHex(R[0], R[1], t);      // light = recent, dark = old (never red)
+  }
+  if (lens === "ext"){
+    if (isDir(n)) return DARK.matches ? "#333840" : "#E6E4DF";
+    if (!extPal){
+      extPal = {};
+      const hues = Object.values(pal());
+      D.extTop.slice(0,11).forEach((r,i)=>{ extPal[r[0].slice(1)] = hues[i % hues.length]; });
+    }
+    return extPal[extOf(n)] || pal().other;
+  }
+  return catColor(n[2]);
+}
+function dimmed(n){
+  if (spotlight === null || lens !== "cat") return false;
+  if (isRoll(n)) return true;
+  return n[2] !== spotlight;
+}
+function draw(){
+  const dpr = devicePixelRatio || 1;
+  const W = box.clientWidth, H = box.clientHeight;
+  for (const c of [cv, ov]){ c.width=W*dpr; c.height=H*dpr;
+    c.getContext("2d").setTransform(dpr,0,0,dpr,0,0); }
+  ctx.clearRect(0,0,W,H);
+  rects = [];
+  const root = stack[stack.length-1];
+  layout(root, 0, 0, W, H, 0, [root]);
+  ctx.textBaseline = "middle";
+  for (const r of rects){
+    const col = colorOf(r.node);
+    ctx.globalAlpha = dimmed(r.node) ? 0.13 : (isDir(r.node) ? 0.92 : 1);
+    ctx.fillStyle = col;
+    const shade = Math.max(0, 1 - r.depth*0.045);
+    ctx.fillRect(r.x+0.5, r.y+0.5, Math.max(r.w-1,0.5), Math.max(r.h-1,0.5));
+    if (r.depth){ // per-depth darkening for hierarchy
+      ctx.globalAlpha *= 1; ctx.fillStyle = "rgba(0,0,0,"+((1-shade)*0.6)+")";
+      ctx.fillRect(r.x+0.5, r.y+0.5, Math.max(r.w-1,0.5), Math.max(r.h-1,0.5));
+    }
+    if (r.hdr){
+      ctx.globalAlpha = dimmed(r.node) ? 0.2 : 0.95;
+      ctx.fillStyle = "rgba(0,0,0,.34)";
+      ctx.fillRect(r.x+0.5, r.y+0.5, Math.max(r.w-1,0.5), HDR);
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 10.5px ui-monospace,Menlo,monospace";
+      clipText(r.node[0]+"  "+human(r.node[1]), r.x+5, r.y+HDR/2+0.5, r.w-10);
+    } else if (!isDir(r.node) && r.w>=46 && r.h>=15){
+      ctx.globalAlpha = dimmed(r.node) ? 0.25 : 0.98;
+      ctx.fillStyle = "rgba(255,255,255,.94)";
+      ctx.font = "10px ui-monospace,Menlo,monospace";
+      clipText(r.node[0], r.x+4, r.y+r.h/2, r.w-8);
+    }
+  }
+  ctx.globalAlpha = 1;
+  crumbRender();
+}
+function clipText(s, x, y, maxw){
+  if (maxw < 14) return;
+  let t = s;
+  while (t.length > 1 && ctx.measureText(t).width > maxw) t = t.slice(0, -2);
+  if (t !== s) t = t.slice(0, Math.max(t.length-1,1)) + "…";
+  ctx.fillText(t, x, y);
+}
+function hit(mx, my){
+  let best = null;
+  for (const r of rects)
+    if (mx>=r.x && mx<=r.x+r.w && my>=r.y && my<=r.y+r.h)
+      if (!best || r.depth > best.depth) best = r;
+  return best;
+}
+function hover(r){
+  const W = box.clientWidth, H = box.clientHeight;
+  octx.clearRect(0,0,W,H);
+  if (!r) { tip.style.opacity = 0; return; }
+  octx.strokeStyle = DARK.matches ? "#fff" : "#1B1D1F";
+  octx.lineWidth = 2;
+  octx.strokeRect(r.x+1, r.y+1, r.w-2, r.h-2);
+  const n = r.node, pct = (100*n[1]/(D.totals.bytes||1)).toFixed(1);
+  const kind = isRoll(n) ? `${n[3][0].toLocaleString()} smaller items, rolled up`
+    : isDir(n) ? "folder" : (CATS[n[2]]||"file");
+  const y = yearOf(n);
+  tip.innerHTML = `<div class="t">${esc(n[0])}</div>
+    <div>${human(n[1])} · ${pct}% of total</div>
+    <div class="d">${esc(kind)}${y ? " · ~"+y : ""}${isDir(n)?" · click to zoom":""}</div>`;
+  tip.style.opacity = 1;
+}
+cv.parentElement.addEventListener("mousemove", e=>{
+  const b = box.getBoundingClientRect();
+  const r = hit(e.clientX-b.left, e.clientY-b.top);
+  hover(r);
+  tip.style.left = Math.min(e.clientX+14, innerWidth-360)+"px";
+  tip.style.top  = (e.clientY+16)+"px";
+});
+cv.parentElement.addEventListener("mouseleave", ()=>hover(null));
+cv.parentElement.addEventListener("click", e=>{
+  const b = box.getBoundingClientRect();
+  const r = hit(e.clientX-b.left, e.clientY-b.top);
+  if (r && isDir(r.node)){ stack = r.chain.concat([r.node]); zoomed(); }
+});
+addEventListener("keydown", e=>{
+  if (e.key === "Escape" && stack.length>1){ stack = [stack[0]]; zoomed(); }
+  else if (e.key === "Backspace" && stack.length>1 &&
+           !/INPUT|TEXTAREA/.test(document.activeElement.tagName)){
+    e.preventDefault(); stack.pop(); zoomed();
+  }
+});
+function zoomed(){
+  location.hash = stack.slice(1).map(n=>encodeURIComponent(n[0])).join("/");
+  draw(); hover(null);
+}
+function crumbRender(){
+  const el = document.getElementById("crumb");
+  el.innerHTML = "";
+  stack.forEach((n,i)=>{
+    if (i){ const s=document.createElement("span"); s.className="sep"; s.textContent="›"; el.appendChild(s); }
+    if (i === stack.length-1){
+      const s=document.createElement("span"); s.className="here mono";
+      s.textContent = (n[0]||"(root)") + " · " + human(n[1]); el.appendChild(s);
+    } else {
+      const b=document.createElement("button"); b.className="mono";
+      b.textContent = n[0]||"(root)";
+      b.onclick = ()=>{ stack = stack.slice(0,i+1); zoomed(); };
+      el.appendChild(b);
+    }
+  });
+}
+function zoomToPath(parts){
+  let chain=[D.tree], cur=D.tree;
+  for (const p of parts){
+    const kids = kidsOf(cur); if (!kids) break;
+    const nxt = kids.find(k=>isDir(k)&&k[0]===p); if(!nxt) break;
+    chain.push(nxt); cur = nxt;
+  }
+  stack = chain; zoomed();
+  document.querySelector(".tmwrap").scrollIntoView({behavior: RM.matches?"auto":"smooth"});
+}
+if (location.hash.length>1)
+  zoomToPath(location.hash.slice(1).split("/").map(decodeURIComponent));
+
+/* lens + legend */
+document.getElementById("lens").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  lens = b.dataset.lens; extPal = null;
+  for (const x of e.currentTarget.children)
+    x.setAttribute("aria-pressed", x===b ? "true":"false");
+  document.getElementById("lenshint").textContent =
+    lens==="age" ? "Sediment view: light = recent, dark = the deep past (old ≠ junk — your 1995 files are strata, not dirt)."
+    : lens==="ext" ? "Colors show the top file extensions. Folders stay neutral — zoom in to see their files."
+    : "Colors show what kind of files live where. Click a legend chip to spotlight one category.";
+  legendRender(); draw();
+});
+function legendRender(){
+  const el = document.getElementById("legend");
+  el.innerHTML = "";
+  if (lens === "cat"){
+    D.cat_totals.forEach((t,i)=>{
+      if (!t[1]) return;
+      const b = document.createElement("button");
+      b.className="chip"; b.setAttribute("aria-pressed", spotlight===i ? "true":"false");
+      b.innerHTML = `<span class="sw" style="background:${catColor(i)}"></span>
+        ${CATS[i]} <span class="pct">${(100*t[0]/(T.bytes||1)).toFixed(1)}%</span>`;
+      b.onclick = ()=>{ spotlight = spotlight===i ? null : i; legendRender(); draw(); };
+      el.appendChild(b);
+    });
+  } else if (lens === "ext"){
+    D.extTop.slice(0,11).forEach(r=>{
+      const s = document.createElement("span"); s.className="chip";
+      if (!extPal) colorOf(["x.q",0,0,0]);
+      s.innerHTML = `<span class="sw" style="background:${(extPal||{})[r[0].slice(1)]||pal().other}"></span>${esc(r[0])} <span class="pct">${human(r[1])}</span>`;
+      el.appendChild(s);
+    });
+  } else {
+    const R = AGE[DARK.matches?"dark":"light"];
+    const s = document.createElement("span"); s.className="chip";
+    s.innerHTML = `<span class="sw" style="background:linear-gradient(90deg,${R[0]},${R[1]});width:70px"></span>
+      recent → oldest`;
+    el.appendChild(s);
+  }
+}
+legendRender();
+
+/* ---------- charts ---------- */
+function chartCanvas(id){
+  const c = document.getElementById(id), dpr = devicePixelRatio||1;
+  const W = c.clientWidth, H = c.clientHeight;
+  c.width = W*dpr; c.height = H*dpr;
+  const x = c.getContext("2d"); x.setTransform(dpr,0,0,dpr,0,0);
+  return [x, W, H];
+}
+function drawAge(){
+  const [x,W,H] = chartCanvas("agechart");
+  const years = Object.keys(D.ageByYear).map(Number).sort((a,b)=>a-b);
+  if (!years.length) return;
+  const lo = years[0], hi = years[years.length-1];
+  const span = Math.max(hi-lo, 1);
+  const max = Math.max(...years.map(y=>D.ageByYear[y][0]), 1);
+  const bw = Math.max(Math.min((W-40)/(span+1)-2, 26), 3);
+  x.font = "10px ui-monospace,Menlo,monospace";
+  x.fillStyle = getComputedStyle(document.body).getPropertyValue("--ink3");
+  const base = H-18;
+  for (let y=lo; y<=hi; y++){
+    const v = (D.ageByYear[y]||[0])[0];
+    const px = 20 + (y-lo)/(span)*(W-40-bw);
+    const bh = Math.max(v/max*(base-14), v?2:0);
+    x.fillStyle = getComputedStyle(document.body).getPropertyValue("--accent");
+    if (v) { roundTop(x, px, base-bh, bw, bh, 3); x.fill(); }
+    if (y===lo || y===hi || (span<14 && (y-lo)%2===0) || (span>=14 && (y-lo)%5===0)){
+      x.fillStyle = getComputedStyle(document.body).getPropertyValue("--ink3");
+      x.fillText(String(y), px-4, H-5);
+    }
+  }
+}
+function roundTop(x, px, py, w, h, r){
+  r = Math.min(r, w/2, h);
+  x.beginPath();
+  x.moveTo(px, py+h); x.lineTo(px, py+r); x.arcTo(px, py, px+r, py, r);
+  x.lineTo(px+w-r, py); x.arcTo(px+w, py, px+w, py+r, r);
+  x.lineTo(px+w, py+h); x.closePath();
+}
+function drawDonut(){
+  const [x,W,H] = chartCanvas("donut");
+  const cx = W/2, cy = H/2, R = Math.min(W,H)/2-10, r = R*0.62;
+  const rows = D.cat_totals.map((t,i)=>[i,t[0]]).filter(r=>r[1]>0)
+    .sort((a,b)=>b[1]-a[1]);
+  const tot = rows.reduce((a,r)=>a+r[1],0)||1;
+  let a0 = -Math.PI/2;
+  const gap = 0.012;
+  for (const [i,v] of rows){
+    const a1 = a0 + (v/tot)*Math.PI*2;
+    x.beginPath();
+    x.arc(cx,cy,R,a0+gap/2,a1-gap/2); x.arc(cx,cy,r,a1-gap/2,a0+gap/2,true);
+    x.closePath(); x.fillStyle = catColor(i); x.fill();
+    a0 = a1;
+  }
+  x.fillStyle = getComputedStyle(document.body).getPropertyValue("--ink");
+  x.font = "600 17px ui-monospace,Menlo,monospace";
+  x.textAlign="center"; x.textBaseline="middle";
+  x.fillText(human(T.bytes), cx, cy-8);
+  x.font = "10.5px system-ui";
+  x.fillStyle = getComputedStyle(document.body).getPropertyValue("--ink3");
+  x.fillText("total", cx, cy+11);
+}
+
+/* ---------- reclaim + top100 + lists ---------- */
+(function(){
+  const el = document.getElementById("reclaim");
+  if (!D.reclaim.length){ el.innerHTML = "<span class='hint'>No removable weight found — clean tree.</span>"; return; }
+  const max = D.reclaim[0].junk_bytes || 1;
+  el.innerHTML = D.reclaim.map(r=>{
+    const rel = r.path.startsWith(D.root) ? r.path.slice(D.root.length+1)||"(top level)" : r.path;
+    return `<div class="rrow">
+      <button class="p mono" data-p="${esc(rel)}" title="zoom the map here">${esc(rel)}</button>
+      <span class="num mono">${human(r.junk_bytes)}</span>
+      <span class="track"><span class="fill" style="width:${(100*r.junk_bytes/max).toFixed(1)}%"></span></span>
+    </div>`;
+  }).join("");
+  el.addEventListener("click", e=>{
+    const b = e.target.closest("button[data-p]"); if(!b) return;
+    zoomToPath(b.dataset.p === "(top level)" ? [] : b.dataset.p.split("/"));
+  });
+})();
+
+let sortK = "size", sortAsc = false;
+function top100render(){
+  const tb = document.querySelector("#top100 tbody");
+  const rows = D.top100.slice();
+  const key = {size:r=>r[0], path:r=>r[1], cat:r=>CATS[r[2]]||"", year:r=>r[3]}[sortK];
+  rows.sort((a,b)=>{ const A=key(a),B=key(b);
+    return (A<B?-1:A>B?1:0) * (sortAsc?1:-1); });
+  tb.innerHTML = rows.map(r=>{
+    const rel = r[1].startsWith(D.root) ? r[1].slice(D.root.length+1) : r[1];
+    return `<tr>
+      <td class="num">${human(r[0])}</td>
+      <td class="path" title="${esc(r[1])}"><span>${esc(rel)}</span></td>
+      <td><span class="badge" style="border-color:${catColor(r[2])};color:${catColor(r[2])}">${CATS[r[2]]||""}</span>${r[4]?' <span class="badge">cloud-only</span>':''}</td>
+      <td class="num">${r[3]||"—"}</td>
+      <td><button class="badge" data-c="${esc(r[1])}">copy path</button></td>
+    </tr>`;
+  }).join("");
+}
+document.querySelector("#top100 thead").addEventListener("click", e=>{
+  const th = e.target.closest("th[data-k]"); if(!th) return;
+  if (sortK === th.dataset.k) sortAsc = !sortAsc; else { sortK = th.dataset.k; sortAsc = false; }
+  top100render();
+});
+document.querySelector("#top100").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-c]"); if(!b) return;
+  (navigator.clipboard ? navigator.clipboard.writeText(b.dataset.c) : Promise.reject())
+    .then(()=>{ b.textContent="copied"; setTimeout(()=>b.textContent="copy path",900); })
+    .catch(()=>{ prompt("Copy the path:", b.dataset.c); });
+});
+top100render();
+
+/* protected / caches / sensitive / junk detail */
+(function(){
+  const el = document.getElementById("lists");
+  let html = "";
+  const famNames = {J1:"System droppings",J2:"Abandoned partial downloads",
+    J3:"Editor/Office temp files",J5:"Crash logs & dumps",J6:"Installers",
+    J7:"Archives with an extracted copy",J8:"Duplicate-name copies",
+    J9:"Zero-byte files",J10:"Broken shortcuts",J13:"Old logs & patch leftovers",
+    SC:"Orphaned photo sidecars"};
+  if (D.junk.length){
+    html += `<details open><summary>Junk & dead weight <span class="sub">${human(D.junk.reduce((a,r)=>a+r.bytes,0))} across ${D.junk.reduce((a,r)=>a+r.count,0).toLocaleString()} items — nothing touched</span></summary><div class="dbody"><table><thead><tr><th>What</th><th>Tier</th><th class="num">Items</th><th class="num">Size</th><th>Examples</th></tr></thead><tbody>`;
+    for (const r of D.junk){
+      const tier = r.tier==="A" ? "🟢 safe" : r.tier==="B" ? "🟡 review" : "🔵 look first";
+      html += `<tr><td>${famNames[r.family]||r.family}</td><td>${tier}</td>
+        <td class="num">${r.count.toLocaleString()}</td><td class="num">${human(r.bytes)}</td>
+        <td class="mono" style="font-size:11.5px;color:var(--ink3)">${r.samples.map(esc).join(" · ")}</td></tr>`;
+    }
+    html += "</tbody></table></div></details>";
+  }
+  if (D.protected.length){
+    html += `<details><summary>Protected zones — excluded from every suggestion <span class="sub">${D.protected.length} zones</span></summary><div class="dbody"><table><thead><tr><th>Path</th><th>Kind</th><th class="num">Size</th><th class="num">Files</th></tr></thead><tbody>`;
+    for (const z of D.protected)
+      html += `<tr><td class="path" title="${esc(z.path)}"><span>${esc(z.path)}</span></td>
+        <td><span class="badge">${z.kind}</span></td>
+        <td class="num">${human(z.bytes)}</td><td class="num">${z.files.toLocaleString()}</td></tr>`;
+    html += "</tbody></table></div></details>";
+  }
+  if (D.caches.length){
+    const cb = D.caches.reduce((a,c)=>a+c.bytes,0);
+    html += `<details><summary>Rebuildable space (caches, node_modules, builds) <span class="sub">${human(cb)} — regenerates if removed, active projects need theirs</span></summary><div class="dbody"><table><tbody>`;
+    for (const c of D.caches)
+      html += `<tr><td class="path" title="${esc(c.path)}"><span>${esc(c.path)}</span></td>
+        <td><span class="badge">${c.kind}</span></td><td class="num">${human(c.bytes)}</td></tr>`;
+    html += "</tbody></table></div></details>";
+  }
+  if (D.sensitive.length){
+    const names = {cred:"Passwords & keys",fin:"Financial",id:"Identity documents",
+      med:"Medical",leg:"Legal",int:"Private media",bak:"Chat & mail exports",cry:"Crypto wallets"};
+    const s1 = D.sensitive.filter(r=>r.sev==="S1").reduce((a,r)=>a+r.count,0);
+    html += `<details><summary>Sensitive items — discreet summary <span class="sub">${s1.toLocaleString()} definite · never in any cleanup plan · click to reveal folders</span></summary><div class="dbody"><table><thead><tr><th>Kind</th><th>Certainty</th><th class="num">Count</th><th>Folders</th></tr></thead><tbody>`;
+    for (const r of D.sensitive)
+      html += `<tr><td>${names[r.cat]||r.cat}</td><td>${r.sev==="S1"?"definite":"borderline"}</td>
+        <td class="num">${r.count.toLocaleString()}</td>
+        <td class="mono" style="font-size:11.5px;color:var(--ink3)">${r.dirs.map(esc).join("<br>")}</td></tr>`;
+    html += `</tbody></table><p class="hint">Detected by NAME only — teedaa never opened these files. Borderline items fail closed (treated as sensitive until you look).</p></div></details>`;
+  }
+  el.innerHTML = html;
+})();
+
+document.getElementById("foot").innerHTML =
+  `Read-only audit by <span class="mono">teedaa</span> · names, sizes, dates and flags only — file contents were never opened · ` +
+  `an OS-level guard made cloud downloads impossible during the scan · ` +
+  `${T.errors.toLocaleString()} unreadable items · generated ${new Date(D.generated*1000).toLocaleString()}`;
+
+/* redraw on resize / theme change */
+let rT;
+addEventListener("resize", ()=>{ clearTimeout(rT); rT = setTimeout(()=>{ draw(); drawAge(); drawDonut(); }, 120); });
+DARK.addEventListener?.("change", ()=>{ extPal=null; legendRender(); draw(); drawAge(); drawDonut(); });
+/* Draw once dimensions exist. If the page is opened in a hidden/zero-height
+   pane, the treemap box measures 0 and would paint nothing with no resize to
+   recover it — poll a few animation frames until it has size. Also re-draw
+   when the tab becomes visible. */
+function drawAll(){ draw(); drawAge(); drawDonut(); }
+(function firstPaint(tries){
+  if (document.getElementById("tmbox").clientHeight > 0){ drawAll(); return; }
+  if (tries > 0) requestAnimationFrame(()=>firstPaint(tries - 1));
+  else drawAll();               // give up gracefully after ~60 frames
+})(60);
+document.addEventListener("visibilitychange", ()=>{
+  if (!document.hidden && rects.length === 0) drawAll();
+});
+</script>
+</body>
+</html>

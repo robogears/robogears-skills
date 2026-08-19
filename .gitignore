@@ -24,3 +24,11 @@ build/
 # Skill working state — never commit a run's scratch data
 *-workspace/
 scratchpad/
+
+# Local machine config and editor scratch — must never reach a public repo
+.claude/
+*.bak
+*.bak-*
+*.tmp
+*.orig
+*~

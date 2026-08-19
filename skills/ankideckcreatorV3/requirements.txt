@@ -1,0 +1,15 @@
+# Pinned on purpose. Two reasons, one of them non-obvious:
+#
+#   1. Supply chain — an unpinned `pip install` fetches and runs whatever the
+#      latest release happens to be, with your full user privileges.
+#   2. Reproducibility — wordfreq's corpus changes between releases, which
+#      SHIFTS WORD RANKS. Ranks are the audio filename key and the resume key,
+#      so a shifted list silently desynchronizes an existing deck from its own
+#      clips when you come back to extend it.
+#
+# Versions verified current on PyPI 2026-07-28.
+edge-tts==7.2.8
+wordfreq==3.1.1
+
+# Language decks in an Indic script also need:
+indic-transliteration==2.3.82

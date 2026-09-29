@@ -1,186 +1,187 @@
 # Launch guide — read this before the first loop run
 
-The skill controls Claude's behavior *inside* the session. A few things *outside* the
-session decide whether a multi-day loop survives, and only the user can set them up. Do
-the one-time setup once; then each launch is two commands. **This loop does not stop on
-its own — read "Stopping the loop" first so you always know how to end it.**
+The skill controls Claude's behaviour *inside* the session; the loop itself runs on Claude
+Code's built-in `/loop`. **There is nothing to install.** A few things *outside* the
+session still decide whether a multi-day loop survives, and only you can set them up.
+**This loop does not stop on its own — read "Stopping the loop" first.**
+
+## Upgrading
+
+**From v0.2.x (hooks + usage daemon):** end any old loop that's still running (type `END OVERNIGHT
+LOOP` in its chat), then preview and run the one-time cleanup:
+
+```bash
+bash ~/.claude/skills/overnightprotocol/scripts/uninstall-legacy.sh --dry-run
+```
+
+```bash
+bash ~/.claude/skills/overnightprotocol/scripts/uninstall-legacy.sh
+```
+
+What the cleanup does:
+- It refuses a real run while an old loop is still live (the dry run always works).
+- It backs up `settings.json` and removes only the overnight hook entries. Your other hooks, even oddly-shaped ones, stay exactly as they were.
+- It keeps your everyday `model | 5h wk ctx` status line.
+- It leaves a symlinked `settings.json` a symlink, and keeps the file's permissions and characters.
+- It moves the old runtime and state files to the Trash; nothing is deleted.
+
+Then **quit and reopen Claude Code** — open sessions keep the old hooks loaded until restarted.
+
+**From any older version, when installing from a zip:** move the old
+`~/.claude/skills/overnightprotocol` folder to the Trash first. Unzipping over it leaves
+retired files behind (v0.2.2's `install.sh` would even re-add the old hooks).
 
 ## One-time setup
 
-**1. Install the helper scripts and wire the loop hooks (one command).**
-The installer copies scripts + loop hooks to a stable path (`~/.claude/overnight-loop/`)
-and merges the gated `Stop`/`SessionStart` loop hooks into `~/.claude/settings.json`
-(preserving your existing keys and any unrelated hooks, backing up first,
-validating the JSON). There is deliberately no PreCompact hook — Claude Code ignores its
-context, so recovery rides on the SessionStart hook instead; the installer also cleans up
-that retired hook from older versions.
+**1. Know how usage limits resume — it depends on where you run the loop.**
 
-```bash
-brew install jq   # only if `which jq` finds nothing — jq ships with recent macOS at /usr/bin/jq
-bash ~/.claude/skills/overnightprotocol/scripts/install.sh
-```
+- **Claude Desktop app** (the usual route). The app's own **"Auto-continue when limits
+  reset"** is on by default. It resumes **5-hour limits only**, about 90 s after the reset,
+  if:
+  - the loop's chat is **open on screen** (its window or a split pane);
+  - its message box is **empty** — no half-typed draft;
+  - the Mac didn't sleep more than 6 h past the reset.
 
-The statusline snapshot feeds `check_usage.sh` real rate-limit data. The installer only
-sets `statusLine` if you don't already have a custom one (it won't clobber ccstatusline
-etc.). It also sets `env.BASH_MAX_TIMEOUT_MS` to 18300000 so the pause procedure's single
-long sleep is allowed. **Hooks load when a session starts — restart Claude Code after
-installing before you launch a loop.**
+  It restarts the chat by posting "I hit my usage limit while you were working…" for you.
+  **Weekly and model-specific limits never auto-resume** — the loop waits until you're back
+  (everything is committed, so nothing is lost). If you run several loops at once, only
+  the chats visible on screen resume.
+- **Terminal CLI.** The `autoContinueAtUsageLimit` setting (on unless turned off). Three
+  traps, all checked by preflight:
+  - it's **off** if any project settings file mentions the key (even set to `true`),
+    unless `~/.claude/settings.json` itself sets it to `true`;
+  - it's **off** if a settings file doesn't parse;
+  - it's **off** if Remote Control starts with every session (`remoteControlAtStartup`).
 
-**Verify:** open Claude Code, send one message, then
-`cat ~/.claude/overnight-usage.json` (percentages should appear) and
-`bash ~/.claude/overnight-loop/preflight.sh "$PWD"` (should end with `monitor:ok`).
+  It also won't wait for a reset more than 24 h away, goes stale ("press enter") if the
+  machine slept across the reset, and gives up after repeated hits.
 
-**Knowing the real number (the usage daemon).** The loop runs a small background daemon
-(`usage_daemon.sh`, started in Phase 0) that refreshes the usage snapshot every ~3 minutes
-so the guardrail is never blind — and heartbeats the loop flag so the hooks can tell a
-live run from a crashed one. It uses the **real** status-line number when Claude Code
-pushes it, and otherwise a **token-based estimate that self-calibrates** to the real number
-the first time it sees one — and the checker reports estimates as `EST_*` with an earlier
-pause margin, so a guess can never wear a real reading's authority. Check it any time with
-`bash ~/.claude/overnight-loop/usage_daemon.sh --status` (look for `source: real`,
-`real-app`, or `estimate-ccusage`; `unknown` — or `estimate-ccusage` with
-`cc_calibrated: false` — means no real source has fed the calibration yet; the output
-also reports whether the daemon/feeder processes are actually running).
+**2. Permissions (the real "no questions" switch).** One unanswered prompt stalls the loop.
+- **Desktop app:** bypass permissions is the most reliable way to keep a loop session going. In Auto mode,
+  Claude Code 2.1.274 sends every wake-up the loop schedules to the safety classifier for
+  review. If a review ever said no, a Desktop loop would end, since nothing retries it.
+  That hasn't been observed; it's a precaution.
+- **Terminal:** `claude --dangerously-skip-permissions`. It still honours explicit `ask`
+  rules; preflight lists any, so remove them first.
+- Consider `"askUserQuestionTimeout": "5m"` in `~/.claude/settings.json`, so a stray
+  question dialog auto-continues instead of waiting all night (confirmed for the terminal
+  CLI; the Desktop app may show questions its own way).
+- Either way the loop writes its hard limits as **deny rules** in the project's
+  `.claude/settings.local.json` (`scripts/deny-rules.sh`). Claude Code enforces deny rules
+  even with prompts bypassed. For plain `git push`, `git -C … push` and `git -c … push` they block:
+  - force pushes (`--force`, `--force-with-lease`, `-f`, `+branch`), `--mirror`, `--all`, `--prune`;
+  - remote branch deletion;
+  - pushes to main, master or the base branch.
 
-**Ways to feed the REAL number (the daemon uses whichever is available, best first):**
-1. **The `real-api` source — RECOMMENDED; works everywhere incl. Desktop-app loops, refreshes
-   every ~60s.** One-time setup:
-   ```bash
-   npm install -g @anthropic-ai/claude-code   # the terminal CLI (separate from the Desktop app)
-   claude                                     # log in once (browser OAuth), then /exit
-   bash ~/.claude/overnight-loop/usage_daemon.sh --status   # triggers the Keychain prompt
-   ```
-   On that first `--status` run macOS asks to allow `security` to read the
-   **"Claude Code-credentials"** Keychain item — click **"Always Allow"** (this is the grant
-   that lets the unattended daemon authenticate). `--status` should then say
-   `real-api: available (Keychain token, valid until …)`, and once a loop's daemon is
-   running the snapshot shows `source: real-api` with the true 5h% and the WORST weekly
-   window (including per-model weeklies). If the token expires mid-run (the CLI refreshes
-   it whenever it runs; the daemon never refreshes tokens itself), the daemon falls back
-   to the estimate and says why — running `claude` once in a terminal heals it.
-2. **Run the loop in the terminal CLI** — the status line fires natively and writes the real
-   number (`source: real`). Also keeps the Keychain token fresh for source 1.
-3. **The Desktop-app cache** (`source: real-app`, via the daemon or `feeder.sh`) — **dead on
-   current app versions** (the app stopped writing `plan-usage-history.json` ~July 2026);
-   kept only for older installs.
-Every real reading also **calibrates** the cost-weighted estimate, so even the fallback
-tracks reality. Kill switch for the API source: `OVERNIGHT_REAL_API=off`.
+  They also block `gh pr merge`, `git reset --hard`, `git branch -D` and `git clean`. They
+  cover the common forms — not every conceivable spelling — so the instructions still
+  matter. Neither the rules nor their record is ever committed. The loop removes exactly
+  the rules it added when it stops. When it upgrades a run started by v0.3.0, it also takes
+  over and removes the three colon-form rules that version wrote. If a run died without
+  wrapping up, remove them with:
 
-**2. Permissions (the real "no questions" switch).**
-One unanswered prompt stalls the loop. Options:
+  ```bash
+  bash ~/.claude/skills/overnightprotocol/scripts/deny-rules.sh remove /path/to/project
+  ```
 
-- `claude --dangerously-skip-permissions` — the most unattended mode. It still honors
-  explicit `ask` rules, so run `/permissions` once and remove any leftover `ask` rules
-  first. Encode the loop's hard limits as `permissions.deny` rules — using the **colon
-  prefix syntax** (a space-star never matches): `Bash(git push --force:*)`,
-  `Bash(git push -f:*)`, `Bash(git clean:*)`. Deny is enforced by Claude Code, not the
-  model.
-- Middle ground: `claude --permission-mode acceptEdits` plus a Bash allowlist for the
-  loop's build/test/git commands (remember to allowlist `git push`).
+  The rules use Claude Code's wildcard form (`Bash(git push *--force*)`); the older
+  `Bash(cmd:*)` prefix form also still works.
 
 **3. Full Disk Access** (System Settings → Privacy & Security → Full Disk Access) for your
-terminal app, granted **before** the first run — a mid-run restart can otherwise revoke
-the terminal's access to your project and every shell command fails with "Operation not
-permitted."
+terminal app, if you use one, granted **before** the first run. A mid-run restart can
+otherwise revoke access to your project, and every shell command fails with "Operation not
+permitted". (The loop backs off hourly if that happens.)
 
-**4. Keep the Mac awake — and keep the terminal open.**
+**4. Keep the Mac awake — and keep Claude Code open.**
+- A sleeping Mac or a quit app can't resume after a limit. The Claude Desktop app usually
+  holds its own "no idle sleep" assertion while it works, and preflight shows who is
+  keeping the Mac awake. It counts only real keep-awake owners: caffeinate, the Claude
+  app, Amphetamine, KeepingYouAwake, Lungo, Theine, Caffeine. A screen that's merely on, or
+  a brief Handoff or video, doesn't count.
+- If nothing is, run this once in any terminal:
 
-```bash
-caffeinate -is tmux new -s loop
-```
+  ```bash
+  caffeinate -dis &
+  ```
 
-- `-i` prevents idle sleep, `-s` keeps it awake **only on AC power — stay plugged in.**
-- **Caveat that bites:** `caffeinate` here wraps the **tmux client**, so its keep-awake
-  assertion lasts only while that client runs. **Closing or detaching the terminal
-  window drops the assertion and the Mac can sleep.** For a true unattended multi-day
-  loop, either leave the terminal window open, or start the keep-awake independently:
-  `caffeinate -is -w $$ &` inside the tmux session, or run `caffeinate` in its own
-  always-on window. Confirm it's live: `pmset -g assertions | grep -i PreventUserIdleSystemSleep`.
-- **Lid stays OPEN** unless you have an external display + keyboard (clamshell); closing
-  the lid sleeps the Mac regardless of `caffeinate`.
+  It keeps the Mac awake **only on AC power**. It stops if that terminal window closes;
+  prefix it with `nohup` to survive that.
+- **Terminal route:** launch inside `caffeinate -dis tmux new -s loop` instead.
+- Check what's holding the Mac awake:
+
+  ```bash
+  pmset -g assertions | grep -E 'pid [0-9]+\('
+  ```
+
+  A line from `powerd` only means "someone is at the Mac" and doesn't count.
+- **Keep the lid open** unless you have an external display and keyboard (clamshell mode).
 
 ## Launching a loop
 
-Inside the caffeinated tmux session, from the project directory:
+Open the project (Desktop app Code tab, or `claude --dangerously-skip-permissions` from the
+project folder) and send a kickoff like:
 
-```bash
-claude --dangerously-skip-permissions
-```
+> Overnight loop. Tasks: [the list, or "none — just keep improving it"]. Keep building
+> and improving non-stop until I stop you. I'm AFK.
 
-Then paste the kickoff, e.g.:
+The skill:
+1. runs the preflight doctor;
+2. sends **one kickoff message** with:
+   - the Stop button;
+   - which uncommitted files it would commit or skip;
+   - its questions, each with the default it will use. The first is the branch: stay on your current branch, or switch to a new `overnight-loop/<date-time>` one. On a feature branch the default is to stay; on `main` it always uses a new branch. Name the branch in your kickoff message and it won't ask;
+3. waits up to about 4 minutes for your answers — reply straight away and it carries on at once;
+4. branches, snapshots, writes the plan and report plus a `.overnight-loop/` folder, captures a baseline, adds the deny rules, and starts `/loop`.
 
-> Overnight-protocol loop. Tasks: [the list, or "none — just keep improving it"]. Keep
-> building and improving non-stop until I stop you. I'm AFK.
+After that, every turn schedules the next. When your list is done, it moves on to the ladder (QA → /audit + fix → research + QoL), forever.
 
-The skill takes it from there: preflight, plan file, branch, baseline, then the work loop
-and — when your list is done — the work-generation ladder (QA → /audit + fix → research +
-QoL), forever.
+## Watching it run
 
-## Watching it run (visuals)
+- **In the app:** the Stop button, plus a heartbeat card after each finished item or rung change (cycle · items done · build status · current item).
+- **On disk:** `OVERNIGHT_LOOP_REPORT.md` in the project. Its STATUS line is always current, and "Questions for you" and "Recommendations" collect what it wants you to decide. Every loop commit:
 
-While a loop is active you get three at-a-glance "it's alive" signals:
-
-- **Status line** (bottom bar, refreshes ~30s) — automatic, no setup: a 🌙 + a spinner that
-  *visibly turns* each refresh (proof of life), a colour-coded 5-hour usage bar, cycle/done
-  counts, the current action, and `⌨ END OVERNIGHT LOOP`.
-- **Heartbeat card in chat** every ~20 turns: `🌙 OVERNIGHT LOOP · ACTIVE — usage NN% …`.
-- **Cockpit pane** (optional, tmux only) — a live dashboard: usage bars (5h / weekly / context),
-  cycle · done · build, current + last action, uptime. It opens automatically in Phase 0 when
-  you launch inside tmux; to open one by hand:
   ```bash
-  tmux split-window -v -l 22% 'bash ~/.claude/overnight-loop/cockpit.sh'
+  git log --oneline --grep='^loop'
   ```
-  It closes itself when the loop ends.
 
-Prefer the loop status in your **tmux status bar** instead of a pane? Add to `~/.tmux.conf`:
-```tmux
-set -g status-right '#(sh ~/.claude/overnight-loop/usage_render.sh statusline)'
-set -g status-interval 15
-```
-When no loop is active this prints nothing, so your normal status bar is unaffected.
+- **Chatting with it mid-run is fine.** It answers, then carries on. Any question it asks you comes with a default and never blocks its work.
 
 ## Stopping the loop (important — it will not stop on its own)
 
-The watchdog blocks a premature end while the loop is active. To end it, remove the flag:
+Press the **Stop button**, or type **`END OVERNIGHT LOOP`**. Claude then:
+1. stops its background tasks;
+2. finishes or shelves the current item;
+3. commits the final report and pushes;
+4. removes its deny rules;
+5. notifies you, and ends `/loop`.
 
-```bash
-rm ~/.claude/overnight-loop-active
-```
+A hard ceiling set at kickoff ("loop until 6am") does the same at that time.
 
-The next time the session ends, it's allowed to — Claude will finalize
-`OVERNIGHT_LOOP_REPORT.md`, push the branch, and stop. Removing the flag also stops the
-background usage daemon within seconds (it polls the flag every 5s; worst case ~90s if a
-refresh is mid-flight). One exception: the standalone **feeder** (`feeder.sh`) is NOT
-gated on the flag — if you started one in a terminal, Ctrl-C it (or `tmux kill-session`)
-yourself. You can also just tell Claude "stop the loop" in the session and it will delete
-the flag, wrap up, and stop. A hard ceiling ("loop until 6am") set at kickoff stops it
-automatically at that time (the watchdog blocks once for wrap-up, then releases).
+**Interrupting a turn (Esc, or the app's stop control) pauses the loop — it does not end
+it cleanly.** Nothing is scheduled mid-turn, so no next tick fires. Send any message
+afterwards (e.g. "carry on") and it re-arms; or type END OVERNIGHT LOOP to end it properly.
 
 ## If the run died (resume)
 
-Nothing is lost — the plan file, report, and commits persist. From the project directory:
+Nothing is lost — the plan, report, `.overnight-loop/` and commits persist. Reopen the
+project's session (terminal: `claude --continue --dangerously-skip-permissions`) and say:
 
-```bash
-claude --continue --dangerously-skip-permissions
-```
+> Resume the overnight loop.
 
-Then: *"Resume the overnight loop: restart the usage daemon, re-read
-OVERNIGHT_LOOP_PLAN.md and OVERNIGHT_LOOP_REPORT.md and continue — don't stop."*
-(The `SessionStart` loop hook injects that state automatically only while the flag's
-heartbeat is fresh — within ~30 min of the crash. After that the hooks treat the run as
-dead and stand down, so the manual prompt above is the reliable path; restarting the
-daemon re-arms the heartbeat and the watchdog with it.)
+It finds the loop branch and switches to it. If the last turn was under 2 hours ago it
+first checks with you that the old session is closed. Then it recovers any uncommitted
+work, relaunches interrupted background tasks, and restarts `/loop`.
 
 ## Known limits — set expectations
 
-- The 95% ceiling (default — safe to run this close to the cap because the guardrail reads
-  REAL percentages via real-api/status line; ESTIMATE readings pause earlier, at 85%) is
-  enforced *between checks*, not mid-token; one huge task started near the threshold can
-  overshoot before the next check. The mid-task check mitigates it, and the remaining
-  5-point buffer above the threshold is the crumple zone — check usage BEFORE any single
-  large operation when the last reading was above ~85%.
-- A weekly-cap hit means the loop **pauses until the weekly window resets** (which can be
-  days) rather than stopping — the platform freezes the session anyway. If you'd rather it
-  stop on a weekly cap, remove the flag.
-- A never-stopping builder is only as safe as its reversibility: everything is on a branch,
-  committed per increment, and pushed — review the branch before merging to main.
+- **Keeping the loop alive is the agent's job.** Every turn ends by scheduling the next,
+  and there's no hook forcing it. In the Desktop app a missed wake-up simply ends the loop
+  (the terminal retries once after 20 min). Everything is committed; "resume the overnight
+  loop" restarts it.
+- **Weekly limits pause the loop until you return** — in the Desktop app always, in the
+  terminal when the reset is more than 24 h away.
+- **Claude Code ends a self-paced loop after about 7 days of continuous ticking.** The loop
+  then pauses with a note to resume.
+- **A never-stopping builder is only as safe as its reversibility.** Everything is on a
+  branch, committed per item and pushed, and new secret-shaped files are never committed.
+  Review the branch before merging.

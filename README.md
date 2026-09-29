@@ -29,16 +29,18 @@ audits diff cleanly into NEW / STILL-OPEN / FIXED / ACCEPTED / REGRESSION. Deliv
 beginner-readable report plus a visual HTML breakdown, and **changes nothing** —
 the fix pass is a separate, opt-in step.
 
-### 🌙 [overnightprotocol](skills/overnightprotocol) · v0.2.2
+### 🌙 [overnightprotocol](skills/overnightprotocol) · v0.3.1
 
 An autonomous build loop that doesn't stop. Hand it a task list, go to sleep.
 
-It works the official list first; when that's exhausted it **generates its own work** —
-QA-hardening, running `/audit` and fixing what it finds, then researching the project
-for quality-of-life improvements. It never runs out of things to do. When the usage cap
-approaches it **pauses rather than stopping**, reading real usage percentages and
-resuming when the window resets. The repo is kept always-committable, and it ends only
-when you explicitly say so.
+It runs on Claude Code's built-in `/loop` — no hooks, nothing added to your global
+settings. It works the official list first; when that's exhausted it **generates its own
+work** — QA-hardening, running `/audit` and fixing what it finds, then researching the
+project for quality-of-life improvements. Every item is committed and pushed on a branch
+(it asks whether to stay on yours or use a new one, and never commits to `main`). New
+secret-shaped files are never committed, and deny rules block force-pushes. Usage
+limits are left to Claude Code's auto-resume, which in the Desktop app covers the
+5-hour limit. It ends only when you explicitly say so.
 
 ### 📁 [teedaa](skills/teedaa) · v0.1.0
 

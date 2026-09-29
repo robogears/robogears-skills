@@ -1,223 +1,242 @@
 #!/usr/bin/env bash
-# overnightprotocol: preflight doctor.
-# One non-interactive check of everything that has to be true for a loop run to
-# survive the night. Prints PASS / WARN / FAIL per item with the exact fix, then a
-# summary line the agent can parse:
-#   PREFLIGHT <pass>/<total> monitor:<ok|estimate|blind> verdict:<OK|FAIL>
+# overnightprotocol: preflight doctor (read-only).
+# One non-interactive check of everything outside the session that decides whether an
+# unattended loop survives the night. Prints PASS / WARN / FAIL per item with the fix,
+# INFO lines that don't count, then a summary line the agent parses:
+#   PREFLIGHT <pass>/<total> verdict:<OK|FAIL> route:<desktop|terminal>
 #
-# Colors are tty-gated: captured/piped output (what the agent parses) carries no
-# ANSI escapes. The summary line never did.
+# Nothing is installed or changed. The loop runs on Claude Code's built-in /loop. Usage
+# limits: the Desktop app auto-resumes 5-hour limits by itself (can't be checked from here);
+# the terminal CLI uses the autoContinueAtUsageLimit setting, which IS checked here.
+# JSON is read with python3 (also required by the loop's helper scripts); jq is not needed.
 #
-# Usage: preflight.sh [project_dir] [threshold]
-#   project_dir  repo to check (default: current directory)
-#   threshold    usage threshold to test the monitor against (default 95)
+# Usage: preflight.sh [project_dir]
 # Exit code: 0 if no FAIL, 1 if any FAIL (WARN does not fail).
+# Env (tests): OVERNIGHT_MANAGED_SETTINGS (default: macOS managed-settings.json path)
 
 set -u
 PROJ="${1:-$PWD}"
-THRESH="${2:-95}"
-HERE="$(cd "$(dirname "$0")" && pwd)"
+case "$PROJ" in "~") PROJ="$HOME" ;; "~/"*) PROJ="$HOME/${PROJ#\~/}" ;; esac
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SETTINGS="$HOME/.claude/settings.json"
+MANAGED="${OVERNIGHT_MANAGED_SETTINGS:-/Library/Application Support/ClaudeCode/managed-settings.json}"
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in claude-desktop*) ROUTE=desktop ;; *) ROUTE=terminal ;; esac
 
-if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'; else G=""; Y=""; R=""; N=""; fi
+if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[36m'; N=$'\033[0m'; else G=""; Y=""; R=""; B=""; N=""; fi
 pass=0; total=0; failed=0
 ok(){   total=$((total+1)); pass=$((pass+1)); printf '  %sPASS%s  %s\n' "$G" "$N" "$1"; }
 warn(){ total=$((total+1));                  printf '  %sWARN%s  %s\n     ↳ %s\n' "$Y" "$N" "$1" "$2"; }
 fail(){ total=$((total+1)); failed=$((failed+1)); printf '  %sFAIL%s  %s\n     ↳ %s\n' "$R" "$N" "$1" "$2"; }
+info(){ printf '  %sINFO%s  %s\n' "$B" "$N" "$1"; }
+mtime(){ date -r "$1" +%s 2>/dev/null; }   # BSD and GNU date both accept -r FILE
 
 echo "overnightprotocol preflight — $(date '+%Y-%m-%d %H:%M')"
-echo "project: $PROJ"
+echo "project: $PROJ · route: $ROUTE"
 echo
 
-# --- dependencies --------------------------------------------------------------
-command -v jq      >/dev/null 2>&1 && ok "jq present ($(command -v jq))"            || fail "jq missing"      "brew install jq  (ships with recent macOS at /usr/bin/jq)"
-command -v python3 >/dev/null 2>&1 && ok "python3 present ($(command -v python3))"  || fail "python3 missing" "xcode-select --install"
-command -v caffeinate >/dev/null 2>&1 && ok "caffeinate present" || warn "caffeinate missing" "part of macOS; without it the Mac may sleep"
+# --- dependencies ---------------------------------------------------------------
+command -v git >/dev/null 2>&1 && ok "git present" || fail "git missing" "xcode-select --install"
+if python3 -c 1 >/dev/null 2>&1; then PY=1; ok "python3 works"
+else PY=""; fail "python3 missing or not runnable" "xcode-select --install — the loop's helper scripts (stage-safe, deny-rules) need it"; fi
+command -v caffeinate >/dev/null 2>&1 || warn "caffeinate missing" "part of macOS; without it the Mac may sleep"
 
-# --- statusline hook wired ------------------------------------------------------
-# A custom (non-bundled) statusline is fine as long as it embeds the snapshot block —
-# never FAIL just because the command isn't a .sh file (audit DAT-statusline-clobber
-# chain: a false FAIL here used to push the agent into clobbering it via install.sh).
-sl_cmd=""
-if [ -f "$SETTINGS" ] && command -v jq >/dev/null 2>&1; then
-  sl_cmd=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
-fi
-if [ -z "$sl_cmd" ]; then
-  fail "statusLine not configured in settings.json" "run scripts/install.sh, or add a statusLine block (see launch-guide.md)"
-elif printf '%s' "$sl_cmd" | grep -q 'statusline_usage_writer\.sh'; then
-  # Extract the script path: prefer a quoted path (install.sh writes sh "..."),
-  # fall back to whitespace-split for older unquoted configs.
-  sl_path=$(printf '%s' "$sl_cmd" | sed -n 's/.*"\([^"]*statusline_usage_writer\.sh\)".*/\1/p')
-  [ -n "$sl_path" ] || sl_path=$(printf '%s\n' "$sl_cmd" | tr ' ' '\n' | grep '\.sh$' | head -1)
-  sl_path="${sl_path/#\~/$HOME}"
-  if [ -n "$sl_path" ] && [ -f "$sl_path" ]; then
-    ok "statusLine points at the bundled snapshot writer"
-  else
-    fail "statusLine references a missing file: ${sl_path:-<none>}" "re-run install.sh to refresh ~/.claude/overnight-loop/"
-  fi
+# --- the engine: /loop must be enabled ---------------------------------------------
+if [ -n "${CLAUDE_CODE_DISABLE_CRON:-}" ] && [ "${CLAUDE_CODE_DISABLE_CRON}" != "0" ]; then
+  fail "CLAUDE_CODE_DISABLE_CRON is set — /loop is disabled" "unset it (shell profile or settings.json env) and restart Claude Code"
 else
-  warn "custom statusline detected ($sl_cmd)" "fine IF it embeds the guarded snapshot block from statusline_usage_writer.sh — the snapshot check below is the real test"
+  ok "/loop engine enabled"
 fi
+[ "${CLAUDE_CODE_LOOP_KEEPALIVE:-}" = "0" ] && info "CLAUDE_CODE_LOOP_KEEPALIVE=0 — the terminal's one-shot retry for a missed wake-up is off"
 
-# --- LOOP hooks wired (this skill's OWN hook filenames — audit QUA-wrong-hook-names:
-#     an earlier version grepped the retired sibling skill's names and could
-#     false-FAIL a loop-only machine or false-PASS one missing the loop watchdog) -----
-for hk in "Stop:overnightloop_stop.sh" "SessionStart:overnightloop_session_start.sh"; do
-  ev="${hk%%:*}"; script="${hk#*:}"
-  n=$(jq -r --arg ev "$ev" --arg s "$script" '[.hooks[$ev][]?.hooks[]?.command // "" | select(contains($s))] | length' "$SETTINGS" 2>/dev/null || echo 0)
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  if [ "$n" -gt 0 ]; then
-    ok "$ev loop hook wired ($script)"
-  else
-    fail "$ev loop hook not wired in settings.json" "run scripts/install.sh, then RESTART Claude Code (hooks load at session start) — without it the watchdog/recovery is OFF even if preflight otherwise passes"
-  fi
+# --- settings files: parse, auto-continue, ask rules, question timeout -----------------
+if [ -n "$PY" ]; then
+  python3 - "$ROUTE" "$SETTINGS" "$MANAGED" "$PROJ/.claude/settings.json" "$PROJ/.claude/settings.local.json" <<'PY'
+import json, os, sys
+route, user, managed, proj, local = sys.argv[1:6]
+def load(p):
+    if not os.path.exists(p) or os.path.getsize(p) == 0:
+        return None, None
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        return (d, None) if isinstance(d, dict) else (None, "not a JSON object")
+    except (ValueError, OSError) as e:
+        return None, str(e).replace("\t", " ")
+files = {"user": user, "managed": managed, "project": proj, "local": local}
+data, bad = {}, []
+for k, p in files.items():
+    d, err = load(p)
+    data[k] = d or {}
+    if err: bad.append(f"{p} ({err})")
+out = []   # (kind, message, fix)
+if bad:
+    out.append(("FAIL", "settings file(s) do not parse: " + "; ".join(bad),
+                "fix the JSON — Claude Code ignores a broken file, and in the terminal it also turns usage-limit auto-continue OFF"))
+else:
+    out.append(("PASS", "settings files parse", ""))
+
+KEY = "autoContinueAtUsageLimit"
+if route == "desktop":
+    out.append(("INFO", "usage limits (Desktop app): it auto-resumes the 5-HOUR limit only (setting 'Auto-continue when limits reset', on by default), "
+                        "about 90 s after the reset, if THIS chat is open on screen with an empty message box. Weekly limits wait for you. Can't be checked from here.", ""))
+    if any(KEY in data[k] for k in ("user", "project", "local")):
+        out.append(("INFO", f"{KEY} is set in a settings file — it only affects terminal sessions, not this Desktop one", ""))
+else:
+    # Claude Code: the first value set in managed policy, then ~/.claude/settings.json, wins;
+    # with neither set it is on only if NO settings file mentions the key and all of them parse.
+    pol, usr = data["managed"].get(KEY), data["user"].get(KEY)
+    present_elsewhere = [k for k in ("project", "local") if KEY in data[k]]
+    if pol is not None:
+        if pol is False:
+            out.append(("FAIL", "usage-limit auto-continue is OFF by managed policy", "ask your admin; otherwise the loop stops at the first usage limit"))
+        else:
+            out.append(("PASS", "usage-limit auto-continue on (managed policy)", ""))
+    elif usr is False:
+        out.append(("FAIL", "usage-limit auto-continue is OFF in ~/.claude/settings.json", f"remove {KEY} or set it true there"))
+    elif usr is True:
+        out.append(("PASS", "usage-limit auto-continue on (set true in ~/.claude/settings.json)", ""))
+    elif present_elsewhere:
+        out.append(("FAIL", f"usage-limit auto-continue is OFF: {KEY} appears in the project's {' and '.join(present_elsewhere)} settings",
+                    "a mention in a project file (even true) turns it off unless ~/.claude/settings.json sets it true — remove it there, or set it true in ~/.claude/settings.json"))
+    elif bad:
+        out.append(("FAIL", "usage-limit auto-continue is OFF because a settings file doesn't parse", "fix the JSON (see above)"))
+    else:
+        out.append(("PASS", "usage-limit auto-continue on (terminal: resumes after a reset up to 24 h away)", ""))
+    try:
+        gcfg = json.load(open(os.path.expanduser("~/.claude.json"), encoding="utf-8"))
+        gcfg = gcfg if isinstance(gcfg, dict) else {}
+    except Exception:
+        gcfg = {}
+    if data["user"].get("remoteControlAtStartup") is True or gcfg.get("remoteControlAtStartup") is True:
+        out.append(("WARN", "Remote Control starts with every session — that disables terminal usage-limit auto-continue",
+                    "set remoteControlAtStartup false for loop sessions, or run the loop in the Desktop app"))
+
+asks = [f"{files[k]} ({len(data[k]['permissions']['ask'])} rule(s))"
+        for k in ("user", "project", "local")
+        if isinstance(data[k].get("permissions"), dict) and isinstance(data[k]["permissions"].get("ask"), list)
+        and data[k]["permissions"]["ask"]]
+if asks:
+    out.append(("WARN", "explicit permission ask-rules present: " + ", ".join(asks),
+                "they force a prompt even with permissions bypassed — one unanswered prompt stalls the night"))
+else:
+    out.append(("PASS", "no permission ask-rules", ""))
+
+t = data["user"].get("askUserQuestionTimeout") or data["project"].get("askUserQuestionTimeout") or data["local"].get("askUserQuestionTimeout")
+if t and t != "never":
+    out.append(("PASS", f"askUserQuestionTimeout = {t} (a stray question auto-continues)", ""))
+else:
+    out.append(("INFO", 'askUserQuestionTimeout not set — a stray question dialog waits forever; consider "askUserQuestionTimeout": "5m" in ~/.claude/settings.json', ""))
+for kind, msg, fix in out:
+    print(f"{kind}\t{msg}\t{fix}")
+PY
+fi > "${TMPDIR:-/tmp}/preflight.$$" 2>/dev/null
+while IFS=$'\t' read -r kind msg fix; do
+  case "$kind" in PASS) ok "$msg" ;; WARN) warn "$msg" "$fix" ;; FAIL) fail "$msg" "$fix" ;; INFO) info "$msg" ;; esac
+done < "${TMPDIR:-/tmp}/preflight.$$"
+rm -f "${TMPDIR:-/tmp}/preflight.$$"
+
+# --- leftover v0.2.x install (hooks, status line, runtime, flag, daemon) --------------
+legacy=""; live=""
+[ -d "$HOME/.claude/overnight-loop" ] && legacy="$legacy runtime-folder"
+if [ -n "$PY" ] && [ -f "$SETTINGS" ]; then
+  hits=$(python3 - "$SETTINGS" <<'PY' 2>/dev/null
+import json, sys
+try: d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception: sys.exit(0)
+def walk(x):
+    if isinstance(x, dict):
+        for v in x.values(): yield from walk(v)
+    elif isinstance(x, list):
+        for v in x: yield from walk(v)
+    elif isinstance(x, str): yield x
+n = sum(1 for s in walk(d.get("hooks", {})) if "overnight-loop/overnightloop_" in s)
+sl = d.get("statusLine"); sl = sl.get("command", "") if isinstance(sl, dict) else ""
+print(f"{n} {1 if '/.claude/overnight-loop/' in (sl or '') else 0}")
+PY
+)
+  set -- $hits
+  [ "${1:-0}" -gt 0 ] 2>/dev/null && legacy="$legacy hooks($1)"
+  [ "${2:-0}" = 1 ] && legacy="$legacy status-line"
+fi
+for f in overnight-usage.json overnight-usage-cal.json overnight-usage-daemon.pid overnight-loop-status; do
+  [ -e "$HOME/.claude/$f" ] && { legacy="$legacy state-files"; break; }
 done
-
-# --- permission ask-rules (the launch guide's #1 run-killer) ----------------------
-# Explicit ask rules force a prompt even under --dangerously-skip-permissions; one
-# unanswered prompt at 1:30am ends the night.
-ask_hits=""
-for sf in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
-          "$PROJ/.claude/settings.json" "$PROJ/.claude/settings.local.json"; do
-  [ -f "$sf" ] || continue
-  n=$(jq -r '.permissions.ask // [] | length' "$sf" 2>/dev/null || echo 0)
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  [ "$n" -gt 0 ] && ask_hits="$ask_hits $sf ($n rule(s))"
-done
-if [ -n "$ask_hits" ]; then
-  warn "explicit permission ask-rules present:$ask_hits" "park them before launching — they stall the run even with --dangerously-skip-permissions"
-else
-  ok "no permission ask-rules in settings files"
-fi
-
-# --- pause timeout (audit LIF-pause-timeout-unset) --------------------------------
-bmt=$(jq -r '.env.BASH_MAX_TIMEOUT_MS // empty' "$SETTINGS" 2>/dev/null)
-if [ -n "$bmt" ] && [ "$bmt" -ge 18120000 ] 2>/dev/null; then
-  ok "BASH_MAX_TIMEOUT_MS=$bmt (single 5-hour pause sleep allowed — pass the explicit timeout on the sleep call itself)"
-else
-  warn "BASH_MAX_TIMEOUT_MS missing or too low (${bmt:-unset})" "re-run install.sh (sets 18300000); otherwise pauses fall back to repeated 9-min sleeps with an explicit timeout"
-fi
-
-# --- leftover LOOP flag (audit QUA-wrong-flag-path: this checks the LOOP's own flag;
-#     the sibling overnight-oldversion's time-boxed flag is its own preflight's job) ----
+pgrep -f "/.claude/overnight-loop/usage_daemon" >/dev/null 2>&1 && legacy="$legacy daemon-running"
 FLAGF="$HOME/.claude/overnight-loop-active"
 if [ -f "$FLAGF" ]; then
-  if ! jq -e '.cwd' "$FLAGF" >/dev/null 2>&1; then
-    fail "loop flag exists but is UNREADABLE ($FLAGF)" "half-armed state: hooks stand down but a daemon may keep running — rm -f $FLAGF"
+  hb=$(mtime "$FLAGF"); case "$hb" in ''|*[!0-9]*) hb=0 ;; esac
+  fcwd="?"; [ -n "$PY" ] && fcwd=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("cwd","?"))' "$FLAGF" 2>/dev/null || echo "?")
+  if [ "$(( $(date +%s) - hb ))" -le 1800 ]; then live="$fcwd"; else legacy="$legacy stale-flag"; fi
+fi
+if [ -n "$live" ]; then
+  warn "an OLD v0.2.x loop is LIVE in: $live" "end it first (type END OVERNIGHT LOOP in its chat). If that is this project, its Stop hook will fight the new loop. Then clean up: bash \"$HERE/uninstall-legacy.sh\" --dry-run"
+elif [ -n "$legacy" ]; then
+  warn "old v0.2.x install still present:$legacy" "inert, but it runs on every turn of every session — preview then clean up: bash \"$HERE/uninstall-legacy.sh\" --dry-run   (then without --dry-run, then restart Claude Code)"
+else
+  ok "no leftover v0.2.x install"
+fi
+
+# --- git ------------------------------------------------------------------------
+if git -C "$PROJ" rev-parse --git-dir >/dev/null 2>&1; then
+  ok "git repository (on $(git -C "$PROJ" rev-parse --abbrev-ref HEAD 2>/dev/null))"
+  if [ -z "$(git -C "$PROJ" status --porcelain)" ]; then
+    ok "git tree clean"
   else
-    fcwd=$(jq -r '.cwd // "?"' "$FLAGF" 2>/dev/null)
-    fend=$(jq -r '.end_epoch // 0' "$FLAGF" 2>/dev/null); fnow=$(date +%s)
-    hb=$(stat -f %m "$FLAGF" 2>/dev/null || stat -c %Y "$FLAGF" 2>/dev/null)
-    if [ -n "${hb:-}" ] && [ "$((fnow - hb))" -gt 1800 ] 2>/dev/null; then
-      warn "STALE loop flag present (cwd: $fcwd; heartbeat $((fnow - hb))s old — dead run)" "hooks already stand down on it; clean up with: rm -f $FLAGF"
-    elif [ "$fend" -gt 0 ] 2>/dev/null && ! [ "$fend" -gt "$fnow" ] 2>/dev/null; then
-      warn "loop flag present with a PASSED ceiling (cwd: $fcwd)" "the next Stop in that project triggers wrap-up; or rm -f $FLAGF"
-    else
-      warn "a loop is ALREADY ARMED (cwd: $fcwd$([ "$fend" -gt 0 ] 2>/dev/null && date -r "$fend" '+; ceiling %H:%M' 2>/dev/null))" "two simultaneous loops cannot both be guarded — stop that run first (rm -f $FLAGF) before arming another project"
-    fi
+    warn "git tree has uncommitted changes" "the kickoff lists them (and which secret-shaped files it would skip) before snapshotting them on the loop branch"
   fi
-else
-  ok "no leftover loop flag"
-fi
-
-# --- snapshot fresh -------------------------------------------------------------
-monitor="blind"
-usage_line=$(OVERNIGHT_ESTIMATE=off bash "$HERE/check_usage.sh" "$THRESH" 2>/dev/null)
-case "$usage_line" in
-  OK*|RECHECK*) ok "usage snapshot live → $usage_line"; monitor="ok" ;;
-  EST_OK*)      ok "usage snapshot live (ESTIMATE source) → $usage_line" ; monitor="estimate" ;;
-  EST_PAUSE*)   warn "snapshot live (ESTIMATE source), currently at/over the estimate margin → $usage_line" "the run would start by pausing — plumbing works, timing may not"; monitor="estimate" ;;
-  PAUSE*)       warn "snapshot live, but usage is currently PAUSED → $usage_line" "the run would start by sleeping until the reset — plumbing works, timing may not"; monitor="ok" ;;
-  WEEKLY_CAP*)  warn "snapshot live, but the WEEKLY cap is already binding → $usage_line" "the loop would start by pausing until the weekly reset (can be days) — remove the flag instead if you'd rather not run this week"; monitor="ok" ;;
-  NO_DATA*) warn "snapshot present but no rate-limit data yet" "send one message in Claude Code, then re-run" ;;
-  STALE*)   warn "snapshot stale ($usage_line)" "statusline/daemon not ticking — is Claude Code open with this statusLine?" ;;
-  MISSING*) fail "no usage snapshot ($usage_line)" "statusline hook not producing data — install.sh + open Claude Code once" ;;
-  *)        warn "unexpected usage state: $usage_line" "inspect check_usage.sh" ;;
-esac
-
-# --- real-api credentials (the daemon's authoritative source; presence only,
-#     token values are never read into shell state or printed) --------------------
-if [ "$(printf '%s' "${OVERNIGHT_REAL_API:-auto}" | tr '[:upper:]' '[:lower:]')" = "off" ]; then
-  warn "real-api source disabled (OVERNIGHT_REAL_API=off)" "the daemon will rely on statusline/estimate only"
-elif python3 - <<'PY'
-import json, os, subprocess, sys, time
-def usable(raw):
-    try: creds = json.loads(raw)
-    except ValueError: return False
-    o = creds.get("claudeAiOauth") if isinstance(creds, dict) else None
-    o = o if isinstance(o, dict) else (creds if isinstance(creds, dict) else {})
-    if not o.get("accessToken"): return False
-    exp = o.get("expiresAt")
-    return not (isinstance(exp, (int, float)) and exp / 1000.0 < time.time() + 60)
-if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"): sys.exit(0)
+  git -C "$PROJ" ls-files --error-unmatch .claude/settings.local.json >/dev/null 2>&1 && \
+    warn "git tracks .claude/settings.local.json" "the loop's deny rules live there and must not be committed — untrack it (git rm --cached .claude/settings.local.json, add it to .gitignore), or the loop runs without deny rules"
+  [ -f "$(git -C "$PROJ" rev-parse --absolute-git-dir 2>/dev/null)/overnight-loop/deny-added.json" ] && \
+    info "deny rules from an earlier loop run are still in this project (a resume keeps them; to drop them: bash \"$HERE/deny-rules.sh\" remove \"$PROJ\")"
+  [ "$(git -C "$PROJ" config --get commit.gpgsign 2>/dev/null)" = "true" ] && \
+    warn "commits are signed (commit.gpgsign=true)" "a signing prompt at 2 a.m. stalls every commit — make sure the signer needs no touch/password, or disable signing for this repo"
+  remote=$(git -C "$PROJ" remote 2>/dev/null | head -n1)
+  if [ -n "$remote" ]; then
+    if [ -n "$PY" ] && python3 - "$PROJ" "$remote" <<'PY' >/dev/null 2>&1
+import os, subprocess, sys
+proj, remote = sys.argv[1], sys.argv[2]
+ssh = subprocess.run(["git", "-C", proj, "config", "--get", "core.sshCommand"], capture_output=True, text=True).stdout.strip()
+ssh = os.environ.get("GIT_SSH_COMMAND") or ssh or "ssh"
+env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=ssh + " -o BatchMode=yes -o ConnectTimeout=10")
 try:
-    p = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-                       capture_output=True, text=True, timeout=10)
-    if p.returncode == 0 and usable(p.stdout): sys.exit(0)
-except Exception: pass
-cred = os.path.expanduser("~/.claude/.credentials.json")
-try:
-    if os.path.exists(cred) and usable(open(cred).read()): sys.exit(0)
-except Exception: pass
-sys.exit(1)
-PY
-then
-  ok "real-api credentials available (daemon will fetch TRUE percentages every ~60s)"
-  monitor="ok"
-else
-  warn "real-api credentials unavailable" "for true % in Desktop-app runs: install + log in the terminal \`claude\` CLI, then run usage_daemon.sh --status once (macOS: click 'Always Allow' on the Keychain prompt). A terminal loop is fine without it (statusline feeds real numbers)."
-fi
-
-# --- estimate fallback warm (version-pinned; bounded — a cold npx cache must not
-#     hang the doctor at the one moment the human is waiting) ----------------------
-CCVER="${OVERNIGHT_CCUSAGE_VER:-20.0.17}"
-printf '%s' "$CCVER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || CCVER=20.0.17   # exact x.y.z only
-if command -v npx >/dev/null 2>&1; then
-  if python3 - "$CCVER" <<'PY'
-import subprocess, sys
-try:
-    p = subprocess.run(["npx", "-y", "ccusage@" + sys.argv[1], "--version"],
-                       capture_output=True, timeout=90)
+    # a dry-run push authenticates for WRITE exactly like the real one, but changes nothing;
+    # --no-verify keeps the project's pre-push hook (tests, lint) from running
+    p = subprocess.run(["git", "-C", proj, "push", "--dry-run", "--no-verify", "--porcelain", remote,
+                        "HEAD:refs/heads/overnightprotocol-preflight-check"],
+                       env=env, capture_output=True, timeout=30)
     sys.exit(0 if p.returncode == 0 else 1)
 except Exception:
     sys.exit(1)
 PY
-  then
-    ok "ccusage estimate fallback reachable (pinned $CCVER)"; [ "$monitor" = "blind" ] && monitor="estimate"
+    then ok "remote '$remote' accepts a push without a password prompt (checked with push --dry-run)"
+    else warn "a push to '$remote' fails or needs a prompt (checked with push --dry-run)" "pushes would fail overnight (no backup) — check the network, SSH agent or credential helper"; fi
   else
-    warn "ccusage not reachable (or >90s)" "run once on network to warm the npx cache: npx -y ccusage@$CCVER --version"
+    warn "no git remote" "no off-machine backup — wrap-up writes a local git bundle instead"
   fi
 else
-  warn "npx not on PATH" "estimate fallback unavailable if the statusline snapshot fails"
+  fail "not a git repository: $PROJ" "the loop needs git (branch, commits). Run from the project root, or git init it yourself first"
 fi
 
-# --- git state ------------------------------------------------------------------
-if git -C "$PROJ" rev-parse --git-dir >/dev/null 2>&1; then
-  if [ -z "$(git -C "$PROJ" status --porcelain)" ]; then
-    ok "git tree clean"
-  else
-    warn "git tree has uncommitted changes" "Phase 0 lists them at kickoff, then snapshots them on the overnight-loop BRANCH with secret-shaped files (*.pem, *.key, *.env*, *credential*, *token*, *secret* — at any depth) excluded — still eyeball the list yourself: everything committed gets PUSHED"
-  fi
-  if git -C "$PROJ" remote | grep -q .; then
-    ok "git remote configured (branch can be pushed as backup)"
-  else
-    warn "no git remote" "no off-machine backup — wrap-up will write a local git bundle instead"
-  fi
-else
-  fail "not a git repository: $PROJ" "git init, or run from the project root"
-fi
-
-# --- keep-awake ----------------------------------------------------------------
+# --- keep-awake: only a real assertion OWNER counts. The system-wide summary line is also
+#     raised by powerd's "prevent sleep while display is on" (i.e. whenever someone is at the
+#     Mac) and by coreaudiod while audio plays; other apps hold short-lived ones (Handoff,
+#     video). Only known keep-awake owners count: caffeinate, the Claude app itself
+#     (NoIdleSleepAssertion), Amphetamine, KeepingYouAwake, Lungo, Theine, Caffeine. -----
 if command -v pmset >/dev/null 2>&1; then
-  if pmset -g assertions 2>/dev/null | grep -qiE 'PreventUserIdleSystemSleep.*1|caffeinate'; then
-    ok "system-sleep prevention active (caffeinate running)"
+  owners=$(pmset -g assertions 2>/dev/null | grep -E '^[[:space:]]*pid [0-9]+\(' \
+             | grep -E 'Prevent(UserIdle)?SystemSleep|PreventUserIdleDisplaySleep|NoIdleSleepAssertion|NoDisplaySleepAssertion' \
+             | sed -E 's/.*pid [0-9]+\(([^)]*)\).*/\1/' | sort -u)
+  keepers=$(printf '%s\n' "$owners" | grep -Ex 'caffeinate|Claude|Amphetamine|KeepingYouAwake|Lungo|Theine|Caffeine' | tr '\n' ' ' | sed 's/ $//')
+  others=$(printf '%s\n' "$owners" | grep -Evx 'caffeinate|Claude|Amphetamine|KeepingYouAwake|Lungo|Theine|Caffeine|powerd|coreaudiod|WindowServer|runningboardd' | grep . | tr '\n' ' ' | sed 's/ $//')
+  [ -n "$others" ] && info "other short-lived sleep assertions present ($others) — not counted as keeping the Mac awake"
+  if [ -n "$keepers" ]; then
+    ok "system-sleep prevention active ($keepers)"
   else
-    warn "no caffeinate assertion detected" "launch inside: caffeinate -is tmux new -s overnight"
+    warn "nothing is keeping the Mac awake" "run  caffeinate -dis &  in a terminal (and keep Claude Code open) — a sleeping Mac stalls the loop and can't auto-resume after a limit"
   fi
 fi
 
 echo
-mon_label=$monitor
 [ "$failed" -gt 0 ] && verdict="FAIL" || verdict="OK"
-printf 'PREFLIGHT %s/%s monitor:%s verdict:%s\n' "$pass" "$total" "$mon_label" "$verdict"
+printf 'PREFLIGHT %s/%s verdict:%s route:%s\n' "$pass" "$total" "$verdict" "$ROUTE"
 [ "$failed" -gt 0 ] && exit 1 || exit 0
